@@ -1,0 +1,33 @@
+{
+	"name": "@hornwitser/eternity_commands",
+	"version": "0.1.0",
+	"description": "Clusterio plugin for custom commands to Eternity Cluster",
+	"author": "Hornwitser <github@hornwitser.no>",
+	"homepage": "https://github.com/Hornwitser/eternity_commands#readme",
+	"license": "MIT",
+	"repository": "Hornwitser/eternity_commands",
+	"main": "dist/plugin/index.js",
+	"scripts": {
+		"prepare": "tsc --build"
+	},
+	"bugs": {
+		"url": "https://github.com/Hornwitser/eternity_commands/issues"
+	},
+	"engines": {
+		"node": ">=18"
+	},
+	"peerDependencies": {
+		"@clusterio/lib": "^2.0.0-alpha.0"
+	},
+	"devDependencies": {
+		"@clusterio/lib": "^2.0.0-alpha.14",
+		"@types/node": "^20.4.5",
+		"typescript": "^5.1.6"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"dependencies": {
+		"@sinclair/typebox": "^0.30.4"
+	}
+}
