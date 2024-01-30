@@ -1,6 +1,6 @@
 {
 	"name": "@hornwitser/eternity_commands",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Clusterio plugin for custom commands to Eternity Cluster",
 	"author": "Hornwitser <github@hornwitser.no>",
 	"homepage": "https://github.com/Hornwitser/eternity_commands#readme",

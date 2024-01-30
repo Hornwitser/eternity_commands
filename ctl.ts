@@ -226,6 +226,66 @@ eternityCommands.add(new lib.Command({
 	},
 }));
 
+const productionMapString = `\
+>>>eNpjZGBkSGcAgwZ7IGHPwZKcn5gD5QHBAQeu5PyCgtQi3fyiV
+GRhzuSi0pRU3fxMVMWpeam5lbpJicVIihvsOTKL8vPQTWAtLsnPQ
+xUpKUpNLYaIQDB3aVFiXmZpLrpeBsZpP0/GNLTIMYDw/3oGhf//Q
+RjIegBUAMIMjA1gHYxAMRhgTc7JTEtjYFBwBGInkDQjA2O1yDr3h
+1VTgEww0HOAMj5ARQ4kwUQ8YQw/B5xSKjCGCZI5xmDwGYkBsbQEZ
+D9EFYcDggGRbAFJMjL2vt264PuxC3aMf1Z+vOSblGDPaOgq8u6D0
+To7oCQ7yJ9McGLWTBDYCfMKA8zMB/ZQqZv2jGfPgMAbe0ZWkA4RE
+OFgASQOeDMzMArwAVkLeoCEggwDzGl2MGNEHBjTwOAbzCePYYzL9
+uj+AAaEDchwORBxAkSALYS7jBHCdOh3YHSQh8lKIpQA9RsxILshB
+eHDkzBrDyPZj+YQzIhA9geaiIoDlmjgAlmYAideMMNdAwzPC+wwn
+sN8B0ZmEAOk6gtQDMIDycCMgtACDuDgZmZAgA/2DD9b9hUDAFAxn
+s8=<<<`;
+
+eternityCommands.add(new lib.Command({
+	definition: ["create-instance <name> <host>", "", (yargs) => {
+		yargs.positional("name", { describe: "name of the new instance", type: "string" });
+		yargs.positional("host", { describe: "host to create instance on", type: "string" })
+		yargs.option("username", { type: "string", nargs: 1, describe: "Factorio username" });
+		yargs.option("token", { type: "string", nargs: 1, describe: "Factorio token" });
+		yargs.option("game-password", { type: "string", nargs: 1, describe: "Factorio game password to set" });
+	}],
+	handler: async function(args: {
+		name: string,
+		host: string,
+		username: string,
+		token: string,
+		gamePassword: string,
+	}, control: Control) {
+		const hostId = await lib.resolveHost(control, args.host);
+		let instanceConfig = new lib.InstanceConfig("control");
+		instanceConfig.set("instance.name", args.name);
+		instanceConfig.set("instance.auto_start", true);
+		instanceConfig.set("factorio.enable_authserver_bans", true);
+		instanceConfig.set("factorio.player_online_autosave_slots", 50);
+		if (args.username) { instanceConfig.setProp("factorio.settings", "username", args.username); }
+		if (args.token) { instanceConfig.setProp("factorio.settings", "token", args.token); }
+		if (args.gamePassword) { instanceConfig.setProp("factorio.settings", "game_password", args.gamePassword); }
+		instanceConfig.setProp("factorio.settings", "non_blocking_saving", true);
+		instanceConfig.set("player_auth.load_plugin" as any, false);
+		const serializedConfig = instanceConfig.toRemote("controller");
+		const instanceId = instanceConfig.get("instance.id");
+
+		console.log(`Creating instance ${instanceConfig.get("instance.name")}`);
+		await control.send(new lib.InstanceCreateRequest(serializedConfig));
+		console.log(`Assinging instance to ${args.host}`);
+		await control.send(new lib.InstanceAssignRequest(instanceId, hostId));
+		console.log(`Creating ${args.name}-world.zip`);
+		const parsed = lib.readMapExchangeString(productionMapString);
+		await control.sendTo({ instanceId }, new lib.InstanceCreateSaveRequest(
+			`${args.name}-world.zip`,
+			Math.floor(Math.random() * 2**53),
+			parsed.map_gen_settings,
+			parsed.map_settings,
+		));
+		console.log("Starting instance");
+		await control.sendTo({ instanceId }, new lib.InstanceStartRequest());
+	},
+}));
+
 export class CtlPlugin extends BaseCtlPlugin {
 	async addCommands(rootCommand: lib.CommandTree) {
 		rootCommand.add(eternityCommands);

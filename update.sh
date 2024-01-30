@@ -1,7 +1,7 @@
 #!/usr/bin/bash -x
 set -e
 shopt -s expand_aliases
-alias ctl='node ../../packages/ctl --config ../../../releasetest/eter.js --plugin-list ../../plugin-list.json'
+alias ctl='./node_modules/.bin/clusterioctl'
 
 for host in "$@"; do
     echo "Updating $host"
