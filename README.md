@@ -7,8 +7,8 @@ Plugin implementing custom commands used in the Eternity Cluster.
 
 Run the following commands in the folder clusterioctl is installed in
 
-    git clone https://github.com/Hornwitser/eternity_commands.git
-    npx clusterioctl plugin add ./eternity_commands
+    npm install @hornwitser/eternity_commands
+    npx clusterioctl plugin add @hornwitser/eternity_commands
 
 ## Usage
 
