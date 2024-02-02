@@ -245,16 +245,27 @@ eternityCommands.add(new lib.Command({
 		yargs.positional("name", { describe: "name of the new instance", type: "string" });
 		yargs.positional("host", { describe: "host to create instance on", type: "string" })
 		yargs.option("username", { type: "string", nargs: 1, describe: "Factorio username" });
+		yargs.option("seed", { describe: "Seed to use, takes precedence over the seed in --map-string", nargs: 1, type: "number" });
+		yargs.option("randomize-seed", { type: "boolean", describe: "like --seed but use a random one", default: false });
+		yargs.option("map-string", { describe: "Map string to use, uses production map by default", nargs: 1, type: "string" });
 		yargs.option("token", { type: "string", nargs: 1, describe: "Factorio token" });
 		yargs.option("game-password", { type: "string", nargs: 1, describe: "Factorio game password to set" });
 	}],
 	handler: async function(args: {
 		name: string,
+		seed?: number,
+		mapString?: string,
+		randomizeSeed: boolean,
 		host: string,
 		username: string,
 		token: string,
 		gamePassword: string,
 	}, control: Control) {
+		if (args.seed !== undefined && args.randomizeSeed) {
+			console.error("--seed and --randomize-seed are mutually exclusive");
+			process.exitCode = 1;
+			return;
+		}
 		const hostId = await lib.resolveHost(control, args.host);
 		let instanceConfig = new lib.InstanceConfig("control");
 		instanceConfig.set("instance.name", args.name);
@@ -268,16 +279,16 @@ eternityCommands.add(new lib.Command({
 		instanceConfig.set("player_auth.load_plugin" as any, false);
 		const serializedConfig = instanceConfig.toRemote("controller");
 		const instanceId = instanceConfig.get("instance.id");
+		const parsed = lib.readMapExchangeString(args.mapString ?? productionMapString);
 
 		console.log(`Creating instance ${instanceConfig.get("instance.name")}`);
 		await control.send(new lib.InstanceCreateRequest(serializedConfig));
 		console.log(`Assinging instance to ${args.host}`);
 		await control.send(new lib.InstanceAssignRequest(instanceId, hostId));
 		console.log(`Creating ${args.name}-world.zip`);
-		const parsed = lib.readMapExchangeString(productionMapString);
 		await control.sendTo({ instanceId }, new lib.InstanceCreateSaveRequest(
 			`${args.name}-world.zip`,
-			Math.floor(Math.random() * 2**53),
+			args.seed ?? (args.randomizeSeed ? Math.floor(Math.random() * 2**53) : undefined),
 			parsed.map_gen_settings,
 			parsed.map_settings,
 		));
