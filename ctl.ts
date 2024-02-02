@@ -286,6 +286,96 @@ eternityCommands.add(new lib.Command({
 	},
 }));
 
+const strcmp = Intl.Collator(undefined, { numeric: true }).compare;
+
+eternityCommands.add(new lib.Command({
+	definition: ["google-sheet-instances", "Print current instance to host mapping in google sheet friendly format", (yargs) => {
+	}],
+	handler: async function(
+		args: { },
+		control: Control,
+	) {
+		const instances = await control.sendTo("controller", new lib.InstanceDetailsListRequest());
+		const hosts = new Map((await control.sendTo("controller", new lib.HostListRequest())).map(h => [h.id, h]));
+		const mapping = instances.map(i => `${i.name},${hosts.get(i.assignedHost!)?.name}`);
+		mapping.sort(strcmp);
+		console.log(mapping.join("\n"));
+	},
+}));
+
+eternityCommands.add(new lib.Command({
+	definition: ["config-get <field>", "Get field in all instance configs", (yargs) => {
+		yargs.positional("field", { describe: "Field to set", type: "string" });
+	}],
+	handler: async function(
+		args: { instance: string, field: string, value?: string, stdin?: boolean },
+		control: Control,
+	) {
+		const instances = await control.sendTo("controller", new lib.InstanceDetailsListRequest());
+		for (const instance of instances) {
+			const config = await control.send(new lib.InstanceConfigGetRequest(instance.id));
+			console.log(instance.name, config[args.field])
+		}
+	},
+}));
+eternityCommands.add(new lib.Command({
+	definition: ["config-set <field> [value]", "Set field in all instance configs", (yargs) => {
+		yargs.positional("field", { describe: "Field to set", type: "string" });
+		yargs.positional("value", { describe: "Value to set", type: "string" });
+		yargs.options({
+			"stdin": { describe: "read value from stdin", nargs: 0, type: "boolean" },
+		});
+	}],
+	handler: async function(
+		args: { instance: string, field: string, value?: string, stdin?: boolean },
+		control: Control,
+	) {
+		if (args.stdin) {
+			args.value = (await lib.readStream(process.stdin)).toString().replace(/\r?\n$/, "");
+		} else if (args.value === undefined) {
+			args.value = "";
+		}
+		const instances = await control.sendTo("controller", new lib.InstanceDetailsListRequest());
+		for (const instance of instances) {
+			await control.send(new lib.InstanceConfigSetFieldRequest(instance.id, args.field, args.value));
+		}
+	},
+}));
+
+eternityCommands.add(new lib.Command({
+	definition: ["config-set-prop <field> <prop> [value]", "Set property of field in all instance configs", (yargs) => {
+		yargs.positional("field", { describe: "Field to set", type: "string" });
+		yargs.positional("prop", { describe: "Property to set", type: "string" });
+		yargs.positional("value", { describe: "JSON parsed value to set", type: "string" });
+		yargs.options({
+			"stdin": { describe: "read value from stdin", nargs: 0, type: "boolean" },
+		});
+	}],
+	handler: async function(
+		args: { instance: string, field: string, prop: string, value?: string, stdin?: boolean },
+		control: Control
+	) {
+		if (args.stdin) {
+			args.value = (await lib.readStream(process.stdin)).toString().replace(/\r?\n$/, "");
+		}
+		let value;
+		try {
+			if (args.value !== undefined) {
+				value = JSON.parse(args.value);
+			}
+		} catch (err: any) {
+			if (args.stdin || /^(\[.*]|{.*}|".*")$/.test(args.value!)) {
+				throw new lib.CommandError(`In parsing value '${args.value}': ${err.message}`);
+			}
+			value = args.value;
+		}
+		const instances = await control.sendTo("controller", new lib.InstanceDetailsListRequest());
+		for (const instance of instances) {
+			await control.send(new lib.InstanceConfigSetPropRequest(instance.id, args.field, args.prop, value));
+		}
+	},
+}));
+
 export class CtlPlugin extends BaseCtlPlugin {
 	async addCommands(rootCommand: lib.CommandTree) {
 		rootCommand.add(eternityCommands);
