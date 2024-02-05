@@ -168,8 +168,11 @@ async function downloadSave(control: Control, instanceId: number, save: string, 
 	console.log(`Downloaded ${save} as ${savePath}`);
 }
 
-function filterSaves(saves: lib.SaveDetails[], intervalMs: number, lastMs: number) {
+function filterSaves(saves: lib.SaveDetails[], intervalMs: number, lastMs: number, excludeAutosaves: boolean) {
 	let remaining = [...saves].sort((a, b) => a.mtimeMs - b.mtimeMs);
+	if (excludeAutosaves) {
+		remaining = remaining.filter(s => !/^_autosave[0-9]+\.zip$/.test(s.name));
+	}
 	const result: lib.SaveDetails[] = [];
 	while (remaining.length) {
 		remaining = remaining.filter(s => s.mtimeMs > lastMs + intervalMs);
@@ -183,17 +186,26 @@ function filterSaves(saves: lib.SaveDetails[], intervalMs: number, lastMs: numbe
 }
 
 async function findLastSaveMs(folder: string) {
-	const saves = await fs.promises.readdir(folder);
-	const times = saves.map(s => Date.parse(s.replace(/(.*)T(.*)[_-](.*)[_-](.*)\.zip/, "$1T$2:$3:$4")));
-	return Math.max(0, ...times);
+	try {
+		const saves = await fs.promises.readdir(folder);
+		const times = saves.map(s => Date.parse(s.replace(/(.*)T(.*)[_-](.*)[_-](.*)\.zip/, "$1T$2:$3:$4")));
+		return Math.max(0, ...times);
+	} catch (err: any) {
+		if (err.code === "ENOENT") {
+			return 0;
+		}
+		throw err;
+	}
 }
 
 eternityCommands.add(new lib.Command({
 	definition: ["dl-saves <folder> [interval]", "", (yargs) => {
 		yargs.positional("folder", { describe: "folder to download to", type: "string" });
 		yargs.positional("interval", { describe: "how close saves can be in seconds", type: "number", default: 3000 })
+		yargs.option("exclude-autosaves", { describe: "Ignore autosaves with no players online", type: "boolean", default: false });
+		yargs.option("dry-run", { describe: "only print saves that would have been downloaded", type: "boolean", default: false });
 	}],
-	handler: async function(args: { folder: string, interval: number }, control: Control) {
+	handler: async function(args: { folder: string, interval: number, excludeAutosaves: boolean, dryRun: boolean }, control: Control) {
 		const hosts = new Map((await control.sendTo("controller", new lib.HostListRequest())).map(h => [h.id, h]));
 		const instances = new Map((await control.sendTo("controller", new lib.InstanceDetailsListRequest())).map(i => [i.id, i]));
 		const allSaves = await control.send(new lib.InstanceSaveDetailsListRequest());
@@ -203,16 +215,21 @@ eternityCommands.add(new lib.Command({
 				continue;
 			}
 			const saves = allSaves.filter(s => s.instanceId == instance.id);
-			await fs.promises.mkdir(`${args.folder}/${instance.name}`, { recursive: true });
+			if (!args.dryRun) {
+				await fs.promises.mkdir(`${args.folder}/${instance.name}`, { recursive: true });
+			}
 			const lastMs = await findLastSaveMs(`${args.folder}/${instance.name}`);
-			for (const save of filterSaves(saves, args.interval * 1000, lastMs)) {
+			for (const save of filterSaves(saves, args.interval * 1000, lastMs, args.excludeAutosaves)) {
 				const name = new Date(save.mtimeMs).toISOString().replace(/:/g, "_") + ".zip";
 				const savePath = `${args.folder}/${instance.name}/${name}`;
 				if (save.size > 100e6) {
 					console.log(`skipping, ${instance.name} ${save.name} > 100 MB`);
 					continue
 				}
-				console.log(`Downloading ${savePath} ${save.size / 1e6} MB`);
+				console.log(`Downloading ${instance.name}:${save.name} as ${savePath} ${save.size / 1e6} MB`);
+				if (args.dryRun) {
+					continue;
+				}
 				try {
 					await downloadSave(control, instance.id, save.name, savePath);
 				} catch (err:any) {
