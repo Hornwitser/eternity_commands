@@ -404,6 +404,227 @@ eternityCommands.add(new lib.Command({
 	},
 }));
 
+eternityCommands.add(new lib.Command({
+	definition: ["rcon-all <command>", "Send RCON command to all instances", (yargs) => {
+		yargs.positional("command", { describe: "command to send", type: "string" });
+	}],
+	handler: async function(args: { command: string }, control: Control) {
+		const instances = await control.sendTo("controller", new lib.InstanceDetailsListRequest());
+		await Promise.all(instances.map(async (instance) => {
+			try {
+				const response = await control.sendTo(
+					{ instanceId: instance.id },
+					new lib.InstanceSendRconRequest(args.command),
+				);
+				// Factorio includes a newline in its response output.
+				process.stdout.write(`${instance.name}: ${response}`);
+			} catch (err: any) {
+				console.error(`${instance.name}: ${err.message}`);
+			}
+		}));
+	},
+}));
+
+
+eternityCommands.add(new lib.Command({
+	definition: ["migrate", "Migrate instances to other hosts", (yargs) => {
+		yargs.option("instances", {
+			describe: "Select instances to migrate",
+			type: "string",
+			array: true,
+			default: [],
+		});
+		yargs.option("to-hosts", {
+			describe: "Target hosts to migrate to. Will use round-robin assigment if more than one is provided",
+			type: "string",
+			required: true,
+			array: true,
+		});
+		yargs.option("from-hosts", {
+			describe: "Migrate all instances from the given host(s)",
+			type: "string",
+			array: true,
+			default: [],
+		});
+	}],
+	handler: async function(args: { instances: string[], fromHosts: string[], toHosts: string[] }, control: Control) {
+		let instanceIds: number[] = [];
+		const instanceMap = new Map(
+			(await control.sendTo("controller", new lib.InstanceDetailsListRequest())).map(i => [i.id, i])
+		);
+		const hostMap = new Map(
+			(await control.sendTo("controller", new lib.HostListRequest())).map(h => [h.id, h])
+		);
+		for (const instance of args.instances) {
+			instanceIds.push(await lib.resolveInstance(control, instance));
+		}
+		for (const host of args.fromHosts) {
+			const hostId = await lib.resolveHost(control, host)
+			instanceIds.push(...[...instanceMap.values()].filter(i => i.assignedHost === hostId).map(i => i.id));
+		}
+
+		// Filter duplicates out
+		instanceIds = [...new Set(instanceIds)];
+
+		if (!instanceIds.length) {
+			console.log("No instances to migrate selected");
+			process.exitCode = 1;
+			return;
+		}
+
+		const toHosts: lib.HostDetails[] = [];
+		for (const host of args.toHosts) {
+			const hostId = await lib.resolveHost(control, host);
+			toHosts.push(hostMap.get(hostId)!);
+		}
+
+		if (!toHosts.length) {
+			console.log("No hosts to migrate to provided.");
+			process.exitCode = 1;
+			return;
+		}
+
+		for (let i = 0; i < instanceIds.length; i++) {
+			const instance = instanceMap.get(instanceIds[i])!;
+			if (instance.assignedHost === undefined) {
+				console.log(`Skipping ${instance.name} due to it not being assigned to any host.`);
+				continue;
+			}
+			const sourceHost = hostMap.get(instance.assignedHost)!;
+			const targetHost = toHosts[i % toHosts.length];
+			if (sourceHost.id === targetHost.id) {
+				console.log(`Skipping ${instance.name} as it's already on ${targetHost.name}`);
+				continue;
+			}
+
+			if (instance.status !== "running" && instance.status !== "stopped") {
+				console.log(`Skiping ${instance.name} as it's status is currently ${instance.status}`);
+				continue;
+			}
+
+			console.log(`Migrating ${instance.name} from ${sourceHost.name} to ${targetHost.name}`);
+			await migrateInstance(control, instance, sourceHost, targetHost);
+		}
+	}
+}));
+
+async function migrateInstance(
+	control: Control,
+	instance: lib.InstanceDetails,
+	sourceHost: lib.HostDetails,
+	targetHost: lib.HostDetails
+) {
+	const running = instance.status === "running";
+	if (running) {
+		console.log("Stopping instance");
+		await control.sendTo({ instanceId: instance.id }, new lib.InstanceStopRequest());
+	}
+
+	// This is somewhat inefficient
+	const save = (
+		await control.sendTo("controller", new lib.InstanceSaveDetailsListRequest())
+	).find(s => s.instanceId === instance.id && s.loadByDefault);
+
+	if (!save) {
+		console.log(`Failed to migrate ${instance.name}: unable to find save which would be loaded`);
+		return;
+	}
+
+	const localName = `${instance.name} ${new Date(save.mtimeMs).toISOString().replace(/:/g, "_")}.zip`
+	console.log(`Downloading ${save.name} as ${localName}`)
+	await streamDownloadSave(control, instance.id, save.name, localName);
+
+	console.log(`Reassigning to ${targetHost.name}`);
+	await control.sendTo("controller", new lib.InstanceAssignRequest(instance.id, targetHost.id));
+
+	console.log(`Uploading ${localName}`);
+	const remoteName = await streamUploadSave(control, instance.id, localName);
+
+	if (running) {
+		console.log("Starting instance");
+		await control.sendTo({ instanceId: instance.id }, new lib.InstanceStartRequest(remoteName));
+	}
+}
+
+async function streamDownloadSave(control: Control, instanceId: number, remoteName: string, localName: string) {
+	let streamId = await control.send(new lib.InstanceDownloadSaveRequest(instanceId, remoteName));
+
+	let url = new URL(control.config.get("control.controller_url")!);
+	url.pathname += `api/stream/${streamId}`;
+	let response = await fetch(url.href);
+
+	let writeStream;
+	let tempFilename = localName.replace(/(\.zip)?$/, ".tmp.zip");
+	while (true) {
+		try {
+			writeStream = fs.createWriteStream(tempFilename, { flags: "wx" });
+			await events.once(writeStream, "open");
+			break;
+		} catch (err: any) {
+			if (err.code === "EEXIST") {
+				tempFilename = await lib.findUnusedName(".", tempFilename, ".tmp.zip");
+			} else {
+				throw err;
+			}
+		}
+	}
+	//@ts-expect-error Broken types
+	stream.Readable.fromWeb(response.body!).pipe(writeStream);
+	await finished(writeStream);
+
+	await fs.promises.rename(tempFilename, localName);
+}
+
+async function streamUploadSave(control: Control, instanceId: number, localName: string) {
+	const file = await fs.promises.open(localName);
+	const url = new URL(control.config.get("control.controller_url")!);
+	url.pathname += "api/upload-save";
+	url.searchParams.append("instance_id", String(instanceId));
+	url.searchParams.append("filename", localName);
+
+	type ResponseData = { errors?: string[], request_errors?: string[], saves?: string[] };
+	let response;
+	try {
+		response = await fetch(url, {
+			method: "POST",
+			headers: {
+				"X-Access-Token": control.config.get("control.controller_token")!,
+				"Content-Type": "application/zip",
+			},
+			body: file.readableWebStream({ type: "bytes" }) as ReadableStream,
+			//@ts-ignore duplex is missing in type
+			duplex: "half",
+		});
+	} catch (err: any) {
+		if (err.cause) {
+			throw err.cause;
+		}
+		throw err;
+	}
+	const result = await response.json() as ResponseData;
+
+
+	for (let error of result.errors || []) {
+		console.error(error);
+	}
+
+	for (let requestError of result.request_errors || []) {
+		console.error(requestError);
+	}
+
+	if (
+		(result.errors || []).length
+		|| (result.request_errors || []).length
+		|| !result.saves
+		|| !result.saves.length
+	) {
+		throw new lib.CommandError("Uploading save failed");
+	}
+
+	return result.saves![0];
+}
+
+
 export class CtlPlugin extends BaseCtlPlugin {
 	async addCommands(rootCommand: lib.CommandTree) {
 		rootCommand.add(eternityCommands);
